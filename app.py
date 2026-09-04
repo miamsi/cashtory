@@ -88,7 +88,7 @@ def parse_transaction_with_ai(user_input: str) -> dict:
     
     response = groq_client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
-        model="gpt-oss-20b", # Specified by user
+        model="gpt-oss-20b", 
         response_format={"type": "json_object"},
         temperature=0.0
     )
@@ -96,13 +96,22 @@ def parse_transaction_with_ai(user_input: str) -> dict:
 
 # --- 5. MAIN APPLICATION UI ---
 def render_app():
-    st.sidebar.title("Navigation")
+    # Removed empty sidebar for better mobile UI experience
     tabs = st.tabs(["Dashboard", "Journaling", "Records", "Settings"])
     
     # Load core data for the session
     df_tx = fetch_data("transactions")
     df_env = fetch_data("envelopes")
     df_wal = fetch_data("wallets")
+    
+    # Fetch user settings (Daily Target)
+    settings_res = supabase.table("user_settings").select("*").eq("user_id", st.session_state.user.id).execute()
+    if not settings_res.data:
+        # Initialize default settings if they don't exist yet
+        supabase.table("user_settings").insert({"user_id": st.session_state.user.id, "daily_target": 150000}).execute()
+        daily_target = 150000
+    else:
+        daily_target = float(settings_res.data[0].get("daily_target", 150000))
     
     # Pre-calculate active lists for dropdowns
     wallet_list = df_wal["name"].tolist() if not df_wal.empty else ["e-money", "cash", "bank"]
@@ -119,7 +128,7 @@ def render_app():
         # Calculate Current Realities
         total_income = df_tx[df_tx["type"] == "Income"]["amount"].sum() if not df_tx.empty else 0
         total_expense = df_tx[df_tx["type"] == "Expense"]["amount"].sum() if not df_tx.empty else 0
-        net_buffer = total_income - total_expense # Simplified buffer calculation
+        net_buffer = total_income - total_expense 
         
         # Calculate daily consumption vs target
         today_str = str(date.today())
@@ -128,7 +137,6 @@ def render_app():
         else:
             today_expenses = 0
             
-        daily_target = 150000 
         target_delta = daily_target - today_expenses
 
         col1.metric("Net Available Buffer", f"Rp {net_buffer:,.0f}")
@@ -144,7 +152,6 @@ def render_app():
         # Envelope Realization (The "Model" Sheet)
         st.subheader("Encumbrance (Envelopes) vs Realization")
         if not df_env.empty and not df_tx.empty:
-            # Group expenses by envelope
             realization = df_tx[df_tx["type"] == "Expense"].groupby("envelope")["amount"].sum().reset_index()
             realization.rename(columns={"amount": "realized"}, inplace=True)
             
@@ -203,7 +210,6 @@ def render_app():
                 envelope = st.selectbox("Envelope (Allocation)", ["None", "Buffer"] + envelope_list)
                 receivable_person = st.text_input("Receivable Person (If applicable)")
                 
-                # Rule: "I might use buffer to top up my pockets... deduct the card and then i add the buffer"
                 buffer_adjustment = st.number_input("Buffer Adjustment (+/-)", value=0, help="Explicitly add or subtract from buffer logic if bypassing standard wallets.")
                 
                 submitted = st.form_submit_button("Save Record", use_container_width=True)
@@ -231,7 +237,6 @@ def render_app():
         st.write("Edits made in this table will sync directly back to your database.")
         
         if not df_tx.empty:
-            # Streamlit Data Editor allows direct cell manipulation
             edited_df = st.data_editor(
                 df_tx.drop(columns=["user_id"]), 
                 use_container_width=True,
@@ -239,9 +244,6 @@ def render_app():
                 key="ledger_editor"
             )
             
-            # Note: Full bi-directional sync logic requires checking st.session_state["ledger_editor"] 
-            # for 'edited_rows' and 'added_rows' and firing Supabase update/insert calls.
-            # Implemented simple save button for version 1 structure.
             if st.button("Apply Ledger Changes"):
                 st.warning("Feature lock for Version 1. To manually delete, edit via Supabase dashboard. Changes here are visual prototypes for strict structural verification.")
         else:
@@ -252,6 +254,16 @@ def render_app():
     # ==========================================
     with tabs[3]:
         st.header("System Setup")
+        
+        # New Settings Block for Daily Target
+        st.subheader("Preferences")
+        new_target = st.number_input("Daily Consumption Target", min_value=0, value=int(daily_target), step=10000)
+        if st.button("Update Target"):
+            supabase.table("user_settings").update({"daily_target": new_target}).eq("user_id", st.session_state.user.id).execute()
+            st.success("Daily target updated!")
+            st.rerun()
+            
+        st.markdown("---")
         
         st.subheader("Manage Wallets / Pockets")
         new_wallet = st.text_input("Wallet Name")
