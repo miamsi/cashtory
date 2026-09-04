@@ -88,7 +88,7 @@ def parse_transaction_with_ai(user_input: str) -> dict:
     
     response = groq_client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
-        model="gpt-oss-20b", 
+        model="openai/gpt-oss-20b", 
         response_format={"type": "json_object"},
         temperature=0.0
     )
