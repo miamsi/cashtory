@@ -36,7 +36,7 @@ def get_client() -> Groq:
 
 
 def _model() -> str:
-    return db.get_settings().get("groq_model", "llama-3.3-70b-versatile")
+    return db.get_settings().get("groq_model", "qwen/qwen3.8-27b")
 
 
 PARSE_SYSTEM_PROMPT = """You convert a short, casual expense description into one or more \
