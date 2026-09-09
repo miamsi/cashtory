@@ -150,6 +150,31 @@ def consumption_performance(period_id: str) -> pd.DataFrame:
     return daily.sort_values("date")
 
 
+def open_receivables(period_id: str) -> pd.DataFrame:
+    """Allocations with a nonzero net receivables balance for this period —
+    i.e. money someone still owes back on a specific allocation.
+
+    This is a NET balance (sum of the receivables column, grouped by
+    allocation), which is what makes it safe to use for matching debt
+    repayments: a plain no-envelope purchase recorded against Buffer (paid in
+    full, receivables = 0) never shows up here, only allocations with an
+    actual outstanding amount do. Positive = owed TO you (you paid for
+    someone else and they haven't paid back); negative = owed BY you.
+    """
+    tx = db.get_transactions(period_id)
+    if tx.empty:
+        return pd.DataFrame(columns=["allocation", "net_receivable"])
+    net = tx.groupby("allocation")["receivables"].sum()
+    net = net[net.abs() > 0.01]
+    if net.empty:
+        return pd.DataFrame(columns=["allocation", "net_receivable"])
+    return (
+        net.reset_index()
+        .rename(columns={"receivables": "net_receivable"})
+        .sort_values("net_receivable", ascending=False)
+    )
+
+
 def allocation_names(period_id: str) -> list[str]:
     """All valid ledger allocation targets for this period: Buffer + envelope
     categories + wallets."""

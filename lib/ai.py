@@ -60,14 +60,19 @@ Rules:
 - Never invent an allocation name.
 
 - "Buffer" is the leftover/overflow account.
-- Use Buffer as the counter-leg ONLY when money moves into or out of an
+- Use Buffer as the counter-leg when money moves into or out of an
   e-wallet or cash-on-hand account.
+- Buffer is ALSO used directly as the spending allocation itself when an
+  expense has no matching envelope category — treat that exactly like a
+  normal one-envelope purchase (ONE leg, receivables = 0). Not every
+  Buffer transaction is a debt; most are just uncategorized spending.
 
-- A normal purchase paid directly from ONE envelope category is ONE leg.
+- A normal purchase paid directly from ONE envelope category (or from
+  Buffer, when nothing else fits) is ONE leg.
   Example:
   "bought coffee 25000"
   -> negative cash_basis on the coffee/food allocation.
-  Do NOT create a Buffer leg.
+  Do NOT create a second Buffer leg for this case.
 
 - A wallet top-up is TWO legs:
   Buffer cash_basis = -amount
@@ -84,9 +89,28 @@ Rules:
 - If no matching spending envelope exists for a wallet purchase,
   emit only the wallet leg.
 
-- If someone will reimburse part of an expense later:
+- If someone will reimburse part of a NEW expense later (a purchase
+  happening right now, part of which is owed back to you):
   cash_basis = total amount paid, negative
   receivables = amount owed back, positive
+
+- DEBT REPAYMENT / SETTLEMENT (e.g. "bayar utang", "ganti utang", "dia bayar
+  balik", "reimbursed me", "paid me back", "temen saya bayar utang..."):
+  this is NOT a new purchase. It reduces an EXISTING open receivable.
+  You are given an "Open receivables" list below — allocations that
+  currently have a nonzero owed balance. Match the repayment to whichever
+  entry in that list the description most plausibly refers to (usually
+  there's only one, or the description/date will hint at it). Emit ONE leg
+  on that SAME allocation:
+    cash_basis = +amount (money coming back in)
+    receivables = -amount (the owed balance going down)
+  Do not default to a category-sounding allocation (e.g. a food envelope)
+  just because the debt happens to be about coffee/food — the money owed
+  lives wherever the ORIGINAL purchase was recorded, not wherever the item
+  category would normally go.
+  If "Open receivables" is empty, or nothing on it plausibly matches, make
+  your best guess but say so explicitly in "note" so the user double-checks
+  before confirming — do not silently invent a match.
 
 - All amounts in the input are positive magnitudes.
   You decide the correct sign.
@@ -139,6 +163,15 @@ def parse_transaction(
             date_format="iso",
         )
 
+    # Allocations with a currently nonzero owed balance, so debt repayments
+    # ("bayar utang...") get matched to where the money actually lives
+    # instead of being guessed by item category. This is a small list (a
+    # handful of rows at most) so it doesn't meaningfully add to the prompt.
+    open_recv_df = logic.open_receivables(period_id)
+    open_receivables = (
+        open_recv_df.to_dict(orient="records") if not open_recv_df.empty else []
+    )
+
     client = get_client()
 
     # IMPORTANT:
@@ -147,7 +180,9 @@ def parse_transaction(
     # RateLimitError 429 - Requested 2048, limit 1000.
     #
     # Transaction parsing only needs a tiny JSON response.
-    # 400 tokens is more than enough.
+    # 400 tokens is more than enough. Adding the open-receivables list only
+    # grows the INPUT, not the requested completion size, so it doesn't
+    # affect this limit.
 
     resp = client.chat.completions.create(
         model=_model(),
@@ -177,6 +212,11 @@ def parse_transaction(
                 "content": (
                     f"Valid allocation names: "
                     f"{json.dumps(valid_allocations, ensure_ascii=False)}\n\n"
+
+                    f"Open receivables (nonzero owed balance right now — "
+                    f"match debt repayments to one of these, not by "
+                    f"category keyword): "
+                    f"{json.dumps(open_receivables, ensure_ascii=False)}\n\n"
 
                     f"Recent ledger rows for style reference "
                     f"(may be empty): {examples}\n\n"
@@ -275,6 +315,7 @@ def _build_context(period_id: str) -> str:
     qv = logic.quick_view(period_id)
     cp = logic.consumption_performance(period_id)
     recent = db.get_transactions(period_id, limit=25)
+    open_recv_df = logic.open_receivables(period_id)
 
     parts = [
         "Buffer summary: "
@@ -287,6 +328,12 @@ def _build_context(period_id: str) -> str:
         "(fund/realisation/remaining per category & wallet):\n"
         + model.to_string(index=False),
     ]
+
+    if not open_recv_df.empty:
+        parts.append(
+            "Open receivables (nonzero owed balance per allocation):\n"
+            + open_recv_df.to_string(index=False)
+        )
 
     if not cp.empty:
         parts.append(
